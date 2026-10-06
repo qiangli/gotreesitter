@@ -13,6 +13,15 @@ blob-free copy — yoke's direct imports and, critically, the transitive
 which embeds the same five grammars), so renaming the module path would leave
 the GPL/MPL bytes linked through gfy.
 
+## Status: temporary
+
+This fork exists only until the upstream PR adding the
+`grammar_exclude_nonpermissive` build tag lands (patch: branch
+`exclude-grammars-tag`, commit on top of the pristine v0.16.0 import; PR URL:
+_to be recorded here when opened_). When it merges: pin upstream at the release
+containing it, build with `-tags grammar_exclude_nonpermissive`, drop the
+`replace`, keep the license check as the guard, and archive this repository.
+
 ## Why the fork exists
 
 gotreesitter embeds pre-compiled tree-sitter grammar parse tables for 206
