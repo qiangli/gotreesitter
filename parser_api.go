@@ -1,0 +1,717 @@
+package gotreesitter
+
+import (
+	"errors"
+	"fmt"
+)
+
+type parseConfig struct {
+	oldTree     *Tree
+	tokenSource TokenSource
+	profiling   bool
+}
+
+// TokenSourceFactory builds a token source for parser source bytes.
+type TokenSourceFactory func(source []byte) (TokenSource, error)
+
+type normalizationTokenSourceFactory = TokenSourceFactory
+
+// ParserLogType categorizes parser log messages.
+type ParserLogType uint8
+
+const (
+	// ParserLogParse emits parser-loop lifecycle and control-flow logs.
+	ParserLogParse ParserLogType = iota
+	// ParserLogLex emits token-source and token-consumption logs.
+	ParserLogLex
+)
+
+// ParserLogger receives parser debug logs when configured via SetLogger.
+type ParserLogger func(kind ParserLogType, message string)
+
+func normalizeReturnedTree(root *Node, source []byte, lang *Language) {
+	if root == nil || lang == nil {
+		return
+	}
+	normalizeGoCompatibility(root, source, lang)
+	normalizeScalaTemplateBodyObjectFragments(root, source, lang)
+	normalizeScalaRecoveredObjectTemplateBodies(root, source, lang)
+	normalizeScalaDefinitionFields(root, source, lang)
+	normalizeScalaTemplateBodyFunctionAnnotations(root, source, lang)
+	normalizeScalaTemplateBodyFunctionEnds(root, source, lang)
+	normalizeScalaCaseClauseEnds(root, source, lang)
+	normalizeHTMLRecoveredNestedCustomTagRanges(root, source, lang)
+	normalizeRootEOFNewlineSpan(root, source, lang)
+}
+
+func shouldNormalizeIncrementalReturnedTree(tree, oldTree *Tree) bool {
+	if tree == nil {
+		return false
+	}
+	if oldTree == nil {
+		return true
+	}
+	return rootOrNil(tree) != rootOrNil(oldTree)
+}
+
+func normalizeReturnedIncrementalTree(tree, oldTree *Tree, source []byte, lang *Language) {
+	if !shouldNormalizeIncrementalReturnedTree(tree, oldTree) {
+		return
+	}
+	normalizeReturnedTree(rootOrNil(tree), source, lang)
+}
+
+func (p *Parser) dfaReparseFactory() normalizationTokenSourceFactory {
+	if p == nil || p.language == nil || len(p.language.LexStates) == 0 {
+		return nil
+	}
+	return func(source []byte) (TokenSource, error) {
+		lexer := NewLexer(p.language.LexStates, source)
+		return newDFATokenSourceDirect(lexer, p.language, p.lookupActionIndex, p.hasKeywordState), nil
+	}
+}
+
+func (p *Parser) tokenSourceReparseFactory(ts TokenSource) normalizationTokenSourceFactory {
+	if rebuilder, ok := ts.(TokenSourceRebuilder); ok {
+		return func(source []byte) (TokenSource, error) {
+			return rebuilder.RebuildTokenSource(source, p.language)
+		}
+	}
+	return nil
+}
+
+func (p *Parser) parseForRecovery(source []byte) (*Tree, error) {
+	if p == nil || p.language == nil {
+		return nil, ErrNoLanguage
+	}
+	parser := p.recoveryParser
+	if parser == nil || parser.language != p.language {
+		parser = NewParser(p.language)
+		p.recoveryParser = parser
+	}
+	parser.skipRecoveryReparse = true
+	if p.reparseFactory != nil {
+		ts, err := p.reparseFactory(source)
+		if err != nil {
+			return nil, err
+		}
+		return parser.ParseWithTokenSource(source, ts)
+	}
+	return parser.Parse(source)
+}
+
+func parseWithSnippetParser(lang *Language, source []byte) (*Tree, error) {
+	return parseWithSnippetParserTimed(lang, source, 0)
+}
+
+// parseWithSnippetParserTimed is parseWithSnippetParser with a per-parse
+// timeout. Used by recovery paths (e.g. csharpRecoverNamespaceFromChildren)
+// to inherit the parent parser's timeout — without this, the snippet pool
+// resets timeoutMicros to 0 and recovery sub-parses could run unbounded.
+func parseWithSnippetParserTimed(lang *Language, source []byte, timeoutMicros uint64) (*Tree, error) {
+	parser := acquireSnippetParser(lang)
+	if parser == nil {
+		return nil, ErrNoLanguage
+	}
+	defer releaseSnippetParser(parser)
+	if timeoutMicros > 0 {
+		parser.timeoutMicros = timeoutMicros
+	}
+	return parser.Parse(source)
+}
+
+type closeableTokenSource interface {
+	Close()
+}
+
+func manageTokenSourceLifetime(ts TokenSource) func() {
+	closer, ok := ts.(closeableTokenSource)
+	if !ok {
+		return func() {}
+	}
+	return closer.Close
+}
+
+func (p *Parser) parseWithTokenSource(source []byte, ts TokenSource, reparseFactory normalizationTokenSourceFactory) (*Tree, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, err
+	}
+	if ts == nil {
+		return nil, ErrNoTokenSource
+	}
+	p.recoveryParser = nil
+	defer func() {
+		p.recoveryParser = nil
+	}()
+	releaseTS := manageTokenSourceLifetime(ts)
+	defer releaseTS()
+	prevFactory := p.reparseFactory
+	p.reparseFactory = reparseFactory
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	deterministicExternalConflicts := fullParseUsesDeterministicExternalConflicts(p.language)
+	initialMaxStacks := fullParseInitialMaxStacks(p.language, p.maxConflictWidth)
+	tree := p.parseInternal(source, p.wrapIncludedRanges(ts), nil, nil, arenaClassFull, nil, initialMaxStacks, 0, 0, deterministicExternalConflicts)
+	tree = p.retryFullParseWithTokenSource(source, ts, initialMaxStacks, deterministicExternalConflicts, tree)
+	if shouldRepeatExternalScannerFullParse(p.language, tree) {
+		tree = p.retryFullParseWithTokenSource(source, ts, initialMaxStacks, deterministicExternalConflicts, tree)
+	}
+	normalizeReturnedTree(rootOrNil(tree), source, p.language)
+	return tree, nil
+}
+
+func (p *Parser) parseIncrementalWithTokenSource(source []byte, oldTree *Tree, ts TokenSource, reparseFactory normalizationTokenSourceFactory) (*Tree, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, err
+	}
+	if ts == nil {
+		return nil, ErrNoTokenSource
+	}
+	releaseTS := manageTokenSourceLifetime(ts)
+	defer releaseTS()
+	if canReuseUnchangedTree(source, oldTree, p.language) {
+		return oldTree, nil
+	}
+	prevFactory := p.reparseFactory
+	p.reparseFactory = reparseFactory
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	tree := p.parseIncrementalInternal(source, oldTree, p.wrapIncludedRanges(ts), nil)
+	normalizeReturnedIncrementalTree(tree, oldTree, source, p.language)
+	return tree, nil
+}
+
+// ParseOption configures ParseWith behavior.
+type ParseOption func(*parseConfig)
+
+// WithOldTree enables incremental parsing against an edited prior tree.
+func WithOldTree(oldTree *Tree) ParseOption {
+	return func(c *parseConfig) {
+		c.oldTree = oldTree
+	}
+}
+
+// WithTokenSource provides a custom token source for parsing.
+func WithTokenSource(ts TokenSource) ParseOption {
+	return func(c *parseConfig) {
+		c.tokenSource = ts
+	}
+}
+
+// WithProfiling enables incremental parse attribution in ParseResult.Profile.
+func WithProfiling() ParseOption {
+	return func(c *parseConfig) {
+		c.profiling = true
+	}
+}
+
+// ParseResult is returned by ParseWith.
+type ParseResult struct {
+	Tree *Tree
+	// Profile is populated only when ParseWith uses WithProfiling for
+	// incremental parsing.
+	Profile IncrementalParseProfile
+	// ProfileAvailable reports whether Profile contains attribution data.
+	ProfileAvailable bool
+}
+
+// Language returns the parser's configured language.
+func (p *Parser) Language() *Language {
+	if p == nil {
+		return nil
+	}
+	return p.language
+}
+
+// SetGLRTrace enables verbose GLR stack tracing to stdout (debug only).
+func (p *Parser) SetGLRTrace(enabled bool) {
+	if p == nil {
+		return
+	}
+	p.glrTrace = enabled
+}
+
+// SetLogger installs a parser debug logger. Pass nil to disable logging.
+func (p *Parser) SetLogger(logger ParserLogger) {
+	if p == nil {
+		return
+	}
+	p.logger = logger
+}
+
+// Logger returns the currently configured parser debug logger.
+func (p *Parser) Logger() ParserLogger {
+	if p == nil {
+		return nil
+	}
+	return p.logger
+}
+
+// SetTimeoutMicros configures a per-parse timeout in microseconds.
+// A value of 0 disables timeout checks.
+func (p *Parser) SetTimeoutMicros(timeoutMicros uint64) {
+	if p == nil {
+		return
+	}
+	p.timeoutMicros = timeoutMicros
+}
+
+// TimeoutMicros returns the parser timeout in microseconds.
+func (p *Parser) TimeoutMicros() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.timeoutMicros
+}
+
+// SetCancellationFlag configures a caller-owned cancellation flag.
+// Parsing stops when the pointed value becomes non-zero.
+func (p *Parser) SetCancellationFlag(flag *uint32) {
+	if p == nil {
+		return
+	}
+	p.cancellationFlag = flag
+}
+
+// CancellationFlag returns the parser's current cancellation flag pointer.
+func (p *Parser) CancellationFlag() *uint32 {
+	if p == nil {
+		return nil
+	}
+	return p.cancellationFlag
+}
+
+// SetIncludedRanges configures parser include ranges.
+// Tokens outside these ranges are skipped.
+func (p *Parser) SetIncludedRanges(ranges []Range) {
+	if p == nil {
+		return
+	}
+	p.included = normalizeIncludedRanges(ranges)
+}
+
+// SetIncludedUTF16Ranges configures parser include ranges from UTF-16
+// code-unit ranges. Internal parser points are derived from source as UTF-8
+// columns.
+func (p *Parser) SetIncludedUTF16Ranges(source []uint16, ranges []UTF16Range) bool {
+	converted, ok := IncludedRangesForUTF16(source, ranges)
+	if !ok {
+		return false
+	}
+	p.SetIncludedRanges(converted)
+	return true
+}
+
+// SetIncludedUTF16ByteRanges configures parser include ranges from
+// endian-specific UTF-16 bytes.
+func (p *Parser) SetIncludedUTF16ByteRanges(source []byte, order UTF16ByteOrder, ranges []UTF16Range) error {
+	converted, err := IncludedRangesForUTF16Bytes(source, order, ranges)
+	if err != nil {
+		return err
+	}
+	p.SetIncludedRanges(converted)
+	return nil
+}
+
+// IncludedRanges returns a copy of the configured include ranges.
+func (p *Parser) IncludedRanges() []Range {
+	if p == nil || len(p.included) == 0 {
+		return nil
+	}
+	out := make([]Range, len(p.included))
+	copy(out, p.included)
+	return out
+}
+
+func (p *Parser) wrapIncludedRanges(ts TokenSource) TokenSource {
+	if p == nil || len(p.included) == 0 || ts == nil {
+		return ts
+	}
+	return newIncludedRangeTokenSource(ts, p.included)
+}
+
+// TokenSource provides tokens to the parser. This interface abstracts over
+// different lexer implementations: the built-in DFA lexer (for hand-built
+// grammars) or custom bridges like GoTokenSource (for real grammars where
+// we can't extract the C lexer DFA).
+type TokenSource interface {
+	// Next returns the next token. It should skip whitespace and comments
+	// as appropriate for the language. Returns a zero-Symbol token at EOF.
+	Next() Token
+}
+
+// TokenSourceRebuilder is an optional extension for token sources that can
+// build a fresh equivalent token source for another source buffer. Result
+// normalization uses this to reparse isolated fragments with the same lexer
+// backend as the original parse.
+type TokenSourceRebuilder interface {
+	RebuildTokenSource(source []byte, lang *Language) (TokenSource, error)
+}
+
+// ByteSkippableTokenSource can jump to a byte offset and return the first
+// token at or after that position.
+type ByteSkippableTokenSource interface {
+	TokenSource
+	SkipToByte(offset uint32) Token
+}
+
+// PointSkippableTokenSource extends ByteSkippableTokenSource with a hint-based
+// skip that avoids recomputing row/column from byte offset. During incremental
+// parsing the reused node already carries its endpoint, so passing it directly
+// eliminates the O(n) offset-to-point scan.
+type PointSkippableTokenSource interface {
+	ByteSkippableTokenSource
+	SkipToByteWithPoint(offset uint32, pt Point) Token
+}
+
+// IncrementalReuseTokenSource is an opt-in marker for custom token sources
+// that are safe for incremental subtree reuse. Implementations must provide
+// stable token boundaries across edits and support deterministic SkipToByte*
+// behavior so reused-tree fast-forwarding remains correct.
+type IncrementalReuseTokenSource interface {
+	TokenSource
+	SupportsIncrementalReuse() bool
+}
+
+type parserStateTokenSource interface {
+	SetParserState(state StateID)
+	// SetGLRStates provides all active GLR stack states so the token source
+	// can compute valid external symbols as the union across all stacks.
+	// This is critical for grammars with external scanners and GLR conflicts.
+	SetGLRStates(states []StateID)
+}
+
+// stackEntry is a single entry on the parser's LR stack, pairing a parser
+// state with the syntax tree node that was shifted or reduced into that state.
+type stackEntry struct {
+	state StateID
+	node  *Node
+}
+
+// errorSymbol is the well-known symbol ID used for error nodes.
+const errorSymbol = Symbol(65535)
+
+// Parse tokenizes and parses source using the built-in DFA lexer, returning
+// a syntax tree. This works for hand-built grammars that provide LexStates.
+// For real grammars that need a custom lexer, use ParseWithTokenSource.
+// If the input is empty, it returns a tree with a nil root and no error.
+func (p *Parser) Parse(source []byte) (*Tree, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, err
+	}
+	if err := p.checkDFALexer(); err != nil {
+		return nil, err
+	}
+	p.recoveryParser = nil
+	defer func() {
+		p.recoveryParser = nil
+	}()
+	prevFactory := p.reparseFactory
+	p.reparseFactory = p.dfaReparseFactory()
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	lexer := NewLexer(p.language.LexStates, source)
+	ts := acquireDFATokenSource(lexer, p.language, p.lookupActionIndex, p.hasKeywordState)
+	defer ts.Close()
+	deterministicExternalConflicts := fullParseUsesDeterministicExternalConflicts(p.language)
+	initialMaxStacks := fullParseInitialMaxStacks(p.language, p.maxConflictWidth)
+	tree := p.parseInternal(source, p.wrapIncludedRanges(ts), nil, nil, arenaClassFull, nil, initialMaxStacks, 0, 0, deterministicExternalConflicts)
+	tree = p.retryFullParseWithDFA(source, initialMaxStacks, deterministicExternalConflicts, tree)
+	if shouldRepeatExternalScannerFullParse(p.language, tree) {
+		tree = p.retryFullParseWithDFA(source, initialMaxStacks, deterministicExternalConflicts, tree)
+	}
+	normalizeReturnedTree(rootOrNil(tree), source, p.language)
+	return tree, nil
+}
+
+// ParseUTF16 parses UTF-16 source represented as Go UTF-16 code units.
+//
+// The parser core uses a canonical UTF-8 view internally so existing byte-based
+// APIs remain unchanged. The returned tree retains the original UTF-16 source
+// and can convert node ranges back to UTF-16 code-unit coordinates.
+func (p *Parser) ParseUTF16(source []uint16) (*Tree, error) {
+	utf8Source, sourceMap := encodeUTF16ToUTF8WithMap(source)
+	tree, err := p.Parse(utf8Source)
+	if err != nil {
+		return nil, err
+	}
+	attachUTF16Source(tree, source, sourceMap)
+	return tree, nil
+}
+
+// ParseUTF16Bytes parses UTF-16 source encoded as bytes with an explicit byte
+// order.
+func (p *Parser) ParseUTF16Bytes(source []byte, order UTF16ByteOrder) (*Tree, error) {
+	units, err := DecodeUTF16Bytes(source, order)
+	if err != nil {
+		return nil, err
+	}
+	return p.ParseUTF16(units)
+}
+
+// ParseUTF16WithTokenSourceFactory parses UTF-16 source using a token source
+// built from the parser's canonical UTF-8 source view.
+func (p *Parser) ParseUTF16WithTokenSourceFactory(source []uint16, factory TokenSourceFactory) (*Tree, error) {
+	utf8Source, sourceMap := encodeUTF16ToUTF8WithMap(source)
+	tree, err := p.ParseWithTokenSourceFactory(utf8Source, factory)
+	if err != nil {
+		return nil, err
+	}
+	attachUTF16Source(tree, source, sourceMap)
+	return tree, nil
+}
+
+// ParseUTF16BytesWithTokenSourceFactory parses UTF-16 bytes using a token
+// source built from the parser's canonical UTF-8 source view.
+func (p *Parser) ParseUTF16BytesWithTokenSourceFactory(source []byte, order UTF16ByteOrder, factory TokenSourceFactory) (*Tree, error) {
+	units, err := DecodeUTF16Bytes(source, order)
+	if err != nil {
+		return nil, err
+	}
+	return p.ParseUTF16WithTokenSourceFactory(units, factory)
+}
+
+// ParseWithTokenSource parses source using a custom token source.
+// This is used for real grammars where the lexer DFA isn't available
+// as data tables (e.g., Go grammar using go/scanner as a bridge).
+func (p *Parser) ParseWithTokenSource(source []byte, ts TokenSource) (*Tree, error) {
+	return p.parseWithTokenSource(source, ts, p.tokenSourceReparseFactory(ts))
+}
+
+// ParseWithTokenSourceFactory parses source using a freshly built custom token
+// source. The factory is also retained for recovery reparses.
+func (p *Parser) ParseWithTokenSourceFactory(source []byte, factory TokenSourceFactory) (*Tree, error) {
+	if factory == nil {
+		return nil, ErrNoTokenSourceFactory
+	}
+	ts, err := factory(source)
+	if err != nil {
+		return nil, err
+	}
+	return p.parseWithTokenSource(source, ts, factory)
+}
+
+// ParseIncremental re-parses source after edits were applied to oldTree.
+// It reuses unchanged subtrees from the old tree for better performance.
+// Call oldTree.Edit() for each edit before calling this method.
+func (p *Parser) ParseIncremental(source []byte, oldTree *Tree) (*Tree, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, err
+	}
+	if canReuseUnchangedTree(source, oldTree, p.language) {
+		return oldTree, nil
+	}
+	if err := p.checkDFALexer(); err != nil {
+		return nil, err
+	}
+	prevFactory := p.reparseFactory
+	p.reparseFactory = p.dfaReparseFactory()
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	lexer := NewLexer(p.language.LexStates, source)
+	ts := acquireDFATokenSource(lexer, p.language, p.lookupActionIndex, p.hasKeywordState)
+	defer ts.Close()
+	tree := p.parseIncrementalInternal(source, oldTree, p.wrapIncludedRanges(ts), nil)
+	normalizeReturnedIncrementalTree(tree, oldTree, source, p.language)
+	return tree, nil
+}
+
+// ParseIncrementalUTF16 re-parses UTF-16 source after edits were applied to
+// oldTree. oldTree should have been produced by ParseUTF16, and UTF-16 edits
+// can be recorded with Tree.EditUTF16.
+func (p *Parser) ParseIncrementalUTF16(source []uint16, oldTree *Tree) (*Tree, error) {
+	utf8Source, sourceMap := encodeUTF16ToUTF8WithMap(source)
+	tree, err := p.ParseIncremental(utf8Source, oldTree)
+	if err != nil {
+		return nil, err
+	}
+	attachUTF16Source(tree, source, sourceMap)
+	return tree, nil
+}
+
+// ParseIncrementalUTF16Bytes re-parses UTF-16 bytes after edits were applied
+// to oldTree.
+func (p *Parser) ParseIncrementalUTF16Bytes(source []byte, oldTree *Tree, order UTF16ByteOrder) (*Tree, error) {
+	units, err := DecodeUTF16Bytes(source, order)
+	if err != nil {
+		return nil, err
+	}
+	return p.ParseIncrementalUTF16(units, oldTree)
+}
+
+// ParseIncrementalUTF16WithTokenSourceFactory re-parses UTF-16 source using a
+// token source built from the parser's canonical UTF-8 source view.
+func (p *Parser) ParseIncrementalUTF16WithTokenSourceFactory(source []uint16, oldTree *Tree, factory TokenSourceFactory) (*Tree, error) {
+	utf8Source, sourceMap := encodeUTF16ToUTF8WithMap(source)
+	tree, err := p.ParseIncrementalWithTokenSourceFactory(utf8Source, oldTree, factory)
+	if err != nil {
+		return nil, err
+	}
+	attachUTF16Source(tree, source, sourceMap)
+	return tree, nil
+}
+
+// ParseIncrementalUTF16BytesWithTokenSourceFactory re-parses UTF-16 bytes using
+// a token source built from the parser's canonical UTF-8 source view.
+func (p *Parser) ParseIncrementalUTF16BytesWithTokenSourceFactory(source []byte, oldTree *Tree, order UTF16ByteOrder, factory TokenSourceFactory) (*Tree, error) {
+	units, err := DecodeUTF16Bytes(source, order)
+	if err != nil {
+		return nil, err
+	}
+	return p.ParseIncrementalUTF16WithTokenSourceFactory(units, oldTree, factory)
+}
+
+// ParseIncrementalWithTokenSource is like ParseIncremental but uses a custom
+// token source.
+func (p *Parser) ParseIncrementalWithTokenSource(source []byte, oldTree *Tree, ts TokenSource) (*Tree, error) {
+	return p.parseIncrementalWithTokenSource(source, oldTree, ts, p.tokenSourceReparseFactory(ts))
+}
+
+// ParseIncrementalWithTokenSourceFactory is like ParseWithTokenSourceFactory
+// for an edited old tree.
+func (p *Parser) ParseIncrementalWithTokenSourceFactory(source []byte, oldTree *Tree, factory TokenSourceFactory) (*Tree, error) {
+	if factory == nil {
+		return nil, ErrNoTokenSourceFactory
+	}
+	ts, err := factory(source)
+	if err != nil {
+		return nil, err
+	}
+	return p.parseIncrementalWithTokenSource(source, oldTree, ts, factory)
+}
+
+func attachUTF16Source(tree *Tree, source []uint16, sourceMap *utf16SourceMap) {
+	if tree == nil {
+		return
+	}
+	tree.sourceEncoding = InputEncodingUTF16
+	tree.sourceUTF16 = source
+	tree.utf16Map = sourceMap
+}
+
+// ParseIncrementalProfiled is like ParseIncremental and also returns runtime
+// attribution for incremental reuse work vs parse/rebuild work.
+func (p *Parser) ParseIncrementalProfiled(source []byte, oldTree *Tree) (*Tree, IncrementalParseProfile, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, IncrementalParseProfile{}, err
+	}
+	if canReuseUnchangedTree(source, oldTree, p.language) {
+		return oldTree, IncrementalParseProfile{}, nil
+	}
+	if err := p.checkDFALexer(); err != nil {
+		return nil, IncrementalParseProfile{}, err
+	}
+	prevFactory := p.reparseFactory
+	p.reparseFactory = p.dfaReparseFactory()
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	lexer := NewLexer(p.language.LexStates, source)
+	ts := acquireDFATokenSource(lexer, p.language, p.lookupActionIndex, p.hasKeywordState)
+	defer ts.Close()
+	timing := &incrementalParseTiming{}
+	tree := p.parseIncrementalInternal(source, oldTree, p.wrapIncludedRanges(ts), timing)
+	normalizeReturnedIncrementalTree(tree, oldTree, source, p.language)
+	return tree, timing.toProfile(), nil
+}
+
+// ParseIncrementalWithTokenSourceProfiled is like ParseIncrementalWithTokenSource
+// and also returns runtime attribution for incremental reuse work vs parse/rebuild work.
+func (p *Parser) ParseIncrementalWithTokenSourceProfiled(source []byte, oldTree *Tree, ts TokenSource) (*Tree, IncrementalParseProfile, error) {
+	if err := p.checkLanguageCompatible(); err != nil {
+		return nil, IncrementalParseProfile{}, err
+	}
+	releaseTS := manageTokenSourceLifetime(ts)
+	defer releaseTS()
+	if canReuseUnchangedTree(source, oldTree, p.language) {
+		return oldTree, IncrementalParseProfile{}, nil
+	}
+	prevFactory := p.reparseFactory
+	p.reparseFactory = p.tokenSourceReparseFactory(ts)
+	defer func() {
+		p.reparseFactory = prevFactory
+	}()
+	timing := &incrementalParseTiming{}
+	tree := p.parseIncrementalInternal(source, oldTree, p.wrapIncludedRanges(ts), timing)
+	normalizeReturnedIncrementalTree(tree, oldTree, source, p.language)
+	return tree, timing.toProfile(), nil
+}
+
+// ParseWith parses source using option-based configuration.
+func (p *Parser) ParseWith(source []byte, opts ...ParseOption) (ParseResult, error) {
+	var cfg parseConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	if cfg.profiling {
+		if cfg.oldTree != nil {
+			if cfg.tokenSource != nil {
+				tree, profile, err := p.ParseIncrementalWithTokenSourceProfiled(source, cfg.oldTree, cfg.tokenSource)
+				return ParseResult{Tree: tree, Profile: profile, ProfileAvailable: true}, err
+			}
+			tree, profile, err := p.ParseIncrementalProfiled(source, cfg.oldTree)
+			return ParseResult{Tree: tree, Profile: profile, ProfileAvailable: true}, err
+		}
+		// Full parses do not currently expose attribution data.
+		if cfg.tokenSource != nil {
+			tree, err := p.ParseWithTokenSource(source, cfg.tokenSource)
+			return ParseResult{Tree: tree, ProfileAvailable: false}, err
+		}
+		tree, err := p.Parse(source)
+		return ParseResult{Tree: tree, ProfileAvailable: false}, err
+	}
+
+	if cfg.oldTree != nil {
+		if cfg.tokenSource != nil {
+			tree, err := p.ParseIncrementalWithTokenSource(source, cfg.oldTree, cfg.tokenSource)
+			return ParseResult{Tree: tree, ProfileAvailable: false}, err
+		}
+		tree, err := p.ParseIncremental(source, cfg.oldTree)
+		return ParseResult{Tree: tree, ProfileAvailable: false}, err
+	}
+
+	if cfg.tokenSource != nil {
+		tree, err := p.ParseWithTokenSource(source, cfg.tokenSource)
+		return ParseResult{Tree: tree, ProfileAvailable: false}, err
+	}
+	tree, err := p.Parse(source)
+	return ParseResult{Tree: tree, ProfileAvailable: false}, err
+}
+
+// ErrNoLanguage is returned when a Parser has no language configured.
+var ErrNoLanguage = errors.New("parser has no language configured")
+
+// ErrNoTokenSourceFactory is returned when a factory-based parse is called
+// without a token source factory.
+var ErrNoTokenSourceFactory = errors.New("parser has no token source factory")
+
+// ErrNoTokenSource is returned when a token-source parse is called without a
+// token source.
+var ErrNoTokenSource = errors.New("parser has no token source")
+
+// checkLanguageCompatible returns an error if the parser's language is nil or
+// incompatible with the runtime.
+func (p *Parser) checkLanguageCompatible() error {
+	if p.language == nil {
+		return ErrNoLanguage
+	}
+	if !p.language.CompatibleWithRuntime() {
+		return fmt.Errorf("language version %d incompatible with parser", p.language.LanguageVersion)
+	}
+	return nil
+}
+
+// checkDFALexer returns an error if the parser's language has no DFA lexer tables.
+func (p *Parser) checkDFALexer() error {
+	if p.language == nil || len(p.language.LexStates) == 0 {
+		return fmt.Errorf("no DFA lexer available for language (use ParseWithTokenSource instead)")
+	}
+	return nil
+}

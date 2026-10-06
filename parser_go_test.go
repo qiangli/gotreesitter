@@ -1,0 +1,655 @@
+package gotreesitter_test
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars"
+)
+
+// collectNamedTypes does a depth-first traversal collecting the Type() of all
+// named nodes. This is the standard way to inspect a tree-sitter parse tree
+// since auxiliary repeat nodes (e.g. source_file_repeat1) are unnamed.
+func collectNamedTypes(lang *gotreesitter.Language, node *gotreesitter.Node) []string {
+	if node == nil {
+		return nil
+	}
+	var types []string
+	if node.IsNamed() {
+		types = append(types, node.Type(lang))
+	}
+	for i := 0; i < node.ChildCount(); i++ {
+		types = append(types, collectNamedTypes(lang, node.Child(i))...)
+	}
+	return types
+}
+
+// findNamedChild does a depth-first search of the subtree rooted at node,
+// returning the first named descendant with the given type. It searches
+// through both named and unnamed children recursively.
+func findNamedChild(lang *gotreesitter.Language, node *gotreesitter.Node, typeName string) *gotreesitter.Node {
+	if node == nil {
+		return nil
+	}
+	for i := 0; i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		if child.IsNamed() && child.Type(lang) == typeName {
+			return child
+		}
+		if found := findNamedChild(lang, child, typeName); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// parseGo is a test helper that creates a parser, lexes and parses Go source.
+// Uses the custom GoTokenSource when the current Go blob is ts2go-compiled
+// (detected by presence of the `source_file_token1` anonymous composite
+// symbol); otherwise falls back to the DFA baked into the grammargen blob.
+func parseGo(t *testing.T, src string) (*gotreesitter.Tree, *gotreesitter.Language) {
+	t.Helper()
+	lang := grammars.GoLanguage()
+	parser := gotreesitter.NewParser(lang)
+	srcBytes := []byte(src)
+	var (
+		tree *gotreesitter.Tree
+		err  error
+	)
+	if _, ok := lang.SymbolByName("source_file_token1"); ok {
+		ts := mustGoTokenSource(t, srcBytes, lang)
+		tree, err = parser.ParseWithTokenSource(srcBytes, ts)
+	} else {
+		tree, err = parser.Parse(srcBytes)
+	}
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if tree.RootNode() == nil {
+		t.Fatal("parse returned nil root")
+	}
+	return tree, lang
+}
+
+func TestParseGoPackageOnly(t *testing.T) {
+	tree, lang := parseGo(t, "package main\n")
+	root := tree.RootNode()
+
+	if root.Type(lang) != "source_file" {
+		t.Fatalf("expected root type source_file, got %q", root.Type(lang))
+	}
+	if root.HasError() {
+		t.Error("root has error flag set")
+	}
+
+	// Should contain a package_clause with a package name node.
+	pkg := findNamedChild(lang, root, "package_clause")
+	if pkg == nil {
+		t.Fatal("no package_clause found in tree")
+	}
+	ident := findNamedChild(lang, pkg, "package_identifier")
+	if ident == nil {
+		// Older grammar snapshots used "identifier" here.
+		ident = findNamedChild(lang, pkg, "identifier")
+	}
+	if ident == nil {
+		t.Fatal("no package identifier found in package_clause")
+	}
+	if got := ident.Text(tree.Source()); got != "main" {
+		t.Errorf("expected identifier text %q, got %q", "main", got)
+	}
+}
+
+func TestParseGoImport(t *testing.T) {
+	tree, lang := parseGo(t, "package main\n\nimport \"fmt\"\n")
+	root := tree.RootNode()
+
+	if root.Type(lang) != "source_file" {
+		t.Fatalf("expected root type source_file, got %q", root.Type(lang))
+	}
+	if root.HasError() {
+		t.Error("root has error flag set")
+	}
+
+	pkg := findNamedChild(lang, root, "package_clause")
+	if pkg == nil {
+		t.Fatal("no package_clause found")
+	}
+
+	imp := findNamedChild(lang, root, "import_declaration")
+	if imp == nil {
+		t.Fatal("no import_declaration found")
+	}
+
+	spec := findNamedChild(lang, imp, "import_spec")
+	if spec == nil {
+		t.Fatal("no import_spec found in import_declaration")
+	}
+
+	strLit := findNamedChild(lang, spec, "interpreted_string_literal")
+	if strLit == nil {
+		t.Fatal("no interpreted_string_literal found in import_spec")
+	}
+	if got := strLit.Text(tree.Source()); got != `"fmt"` {
+		t.Errorf("expected string literal text %q, got %q", `"fmt"`, got)
+	}
+}
+
+func TestParseGoFile(t *testing.T) {
+	src := `package main
+
+func main() {
+	println("hello")
+}
+`
+	tree, lang := parseGo(t, src)
+	root := tree.RootNode()
+
+	if root.Type(lang) != "source_file" {
+		t.Fatalf("expected root type source_file, got %q", root.Type(lang))
+	}
+	if root.HasError() {
+		t.Error("root has error flag set")
+	}
+
+	// Verify package_clause
+	pkg := findNamedChild(lang, root, "package_clause")
+	if pkg == nil {
+		t.Fatal("no package_clause found")
+	}
+
+	// Verify function_declaration
+	fn := findNamedChild(lang, root, "function_declaration")
+	if fn == nil {
+		t.Fatal("no function_declaration found")
+	}
+
+	// Function name
+	fnName := findNamedChild(lang, fn, "identifier")
+	if fnName == nil {
+		t.Fatal("no identifier (function name) in function_declaration")
+	}
+	if got := fnName.Text(tree.Source()); got != "main" {
+		t.Errorf("expected function name %q, got %q", "main", got)
+	}
+
+	// Parameter list
+	params := findNamedChild(lang, fn, "parameter_list")
+	if params == nil {
+		t.Fatal("no parameter_list in function_declaration")
+	}
+
+	// Block body
+	block := findNamedChild(lang, fn, "block")
+	if block == nil {
+		t.Fatal("no block in function_declaration")
+	}
+
+	// The println("hello") call is inside the block. Our SLR parser may
+	// parse it as either call_expression or type_conversion_expression
+	// (both are valid LR parses for `identifier(expr)` in Go; the real
+	// tree-sitter uses GLR to resolve the ambiguity). Accept either.
+	call := findNamedChild(lang, block, "call_expression")
+	typeConv := findNamedChild(lang, block, "type_conversion_expression")
+	if call == nil && typeConv == nil {
+		t.Fatal("no call_expression or type_conversion_expression in block")
+	}
+
+	// Verify the string argument is present.
+	strLit := findNamedChild(lang, block, "interpreted_string_literal")
+	if strLit == nil {
+		t.Fatal("no interpreted_string_literal in function body")
+	}
+	if got := strLit.Text(tree.Source()); got != `"hello"` {
+		t.Errorf("expected string literal %q, got %q", `"hello"`, got)
+	}
+}
+
+func TestParseGoNoErrors(t *testing.T) {
+	// Valid Go source should produce an error-free tree.
+	sources := []struct {
+		name string
+		src  string
+	}{
+		{"empty package", "package main\n"},
+		{"with import", "package main\n\nimport \"fmt\"\n"},
+		{"with function", "package main\n\nfunc main() {}\n"},
+		{"with var", "package main\n\nvar x int\n"},
+		{"with const", "package main\n\nconst c = 1\n"},
+		{"with type", "package main\n\ntype T struct{}\n"},
+	}
+
+	for _, tc := range sources {
+		t.Run(tc.name, func(t *testing.T) {
+			tree, lang := parseGo(t, tc.src)
+			root := tree.RootNode()
+			if root.Type(lang) != "source_file" {
+				t.Errorf("expected source_file root, got %q", root.Type(lang))
+			}
+			if root.HasError() {
+				t.Errorf("unexpected error in parse tree for %q", tc.name)
+			}
+		})
+	}
+}
+
+func TestParseGoTokenSource(t *testing.T) {
+	// Verify the token source produces the expected token sequence. Only
+	// meaningful against ts2go's Go blob — GoTokenSource was calibrated to
+	// that symbol layout. Skip when the current blob is grammargen (default
+	// in 0.14.0+); GoTokenSource remains usable via the public API for
+	// callers carrying their own ts2go Go blob.
+	lang := grammars.GoLanguage()
+	if _, ok := lang.SymbolByName("source_file_token1"); !ok {
+		t.Skip("GoTokenSource is ts2go-specific; current Go blob is grammargen-compiled")
+	}
+	src := []byte("package main\n")
+	ts := mustGoTokenSource(t, src, lang)
+	semiSyms := lang.TokenSymbolsByName(";")
+	if len(semiSyms) == 0 {
+		t.Fatal("go language missing semicolon token symbol")
+	}
+
+	expected := []struct {
+		sym  gotreesitter.Symbol
+		text string
+	}{
+		{5, "package"},      // anon_sym_package
+		{1, "main"},         // sym_identifier
+		{semiSyms[0], "\n"}, // regular semicolon token for auto-inserted newline
+		{0, ""},             // EOF
+	}
+
+	for i, want := range expected {
+		tok := ts.Next()
+		if tok.Symbol != want.sym {
+			t.Errorf("token %d: expected symbol %d, got %d", i, want.sym, tok.Symbol)
+		}
+		if tok.Text != want.text {
+			t.Errorf("token %d: expected text %q, got %q", i, want.text, tok.Text)
+		}
+	}
+}
+
+func TestParseGoDeclarations(t *testing.T) {
+	// Test that individual declaration types are recognized correctly.
+	// We test each declaration in isolation to avoid multi-function GLR
+	// conflicts (our parser is SLR, not GLR).
+	tests := []struct {
+		name     string
+		src      string
+		nodeType string
+	}{
+		{
+			"package clause",
+			"package foo\n",
+			"package_clause",
+		},
+		{
+			"import declaration",
+			"package main\n\nimport \"fmt\"\n",
+			"import_declaration",
+		},
+		{
+			"function declaration",
+			"package main\n\nfunc hello() {}\n",
+			"function_declaration",
+		},
+		{
+			"var declaration",
+			"package main\n\nvar x int\n",
+			"var_declaration",
+		},
+		{
+			"const declaration",
+			"package main\n\nconst c = 42\n",
+			"const_declaration",
+		},
+		{
+			"type declaration",
+			"package main\n\ntype T struct{}\n",
+			"type_declaration",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tree, lang := parseGo(t, tc.src)
+			root := tree.RootNode()
+			if root.Type(lang) != "source_file" {
+				t.Fatalf("expected source_file root, got %q", root.Type(lang))
+			}
+			found := findNamedChild(lang, root, tc.nodeType)
+			if found == nil {
+				// Dump named types for debugging.
+				types := collectNamedTypes(lang, root)
+				t.Fatalf("expected %q not found; tree contains: %v", tc.nodeType, types)
+			}
+		})
+	}
+}
+
+func TestParseGoFunctionBody(t *testing.T) {
+	src := `package main
+
+func hello() {
+	fmt.Println("world")
+}
+`
+	tree, lang := parseGo(t, src)
+	root := tree.RootNode()
+
+	if root.HasError() {
+		t.Error("root has error flag set")
+	}
+
+	fn := findNamedChild(lang, root, "function_declaration")
+	if fn == nil {
+		t.Fatal("no function_declaration")
+	}
+
+	block := findNamedChild(lang, fn, "block")
+	if block == nil {
+		t.Fatal("no block in function_declaration")
+	}
+
+	// selector_expression for fmt.Println
+	sel := findNamedChild(lang, block, "selector_expression")
+	if sel == nil {
+		t.Fatal("no selector_expression in block")
+	}
+
+	// The string argument.
+	strLit := findNamedChild(lang, block, "interpreted_string_literal")
+	if strLit == nil {
+		t.Fatal("no interpreted_string_literal in function body")
+	}
+	if got := strLit.Text(tree.Source()); got != `"world"` {
+		t.Errorf("expected string literal %q, got %q", `"world"`, got)
+	}
+}
+
+func TestParseGoExplicitStatementSemicolonPreserved(t *testing.T) {
+	src := `package main
+
+func hello() int { v := 0; return v }
+`
+	tree, lang := parseGo(t, src)
+	root := tree.RootNode()
+
+	if root.HasError() {
+		t.Fatalf("root has error flag set: %s", root.SExpr(lang))
+	}
+
+	stmtList := findNamedChild(lang, root, "statement_list")
+	if stmtList == nil {
+		stmtList = findNamedChild(lang, root, "statement_list_repeat1")
+	}
+	if stmtList == nil {
+		t.Fatalf("no statement_list found: %s", root.SExpr(lang))
+	}
+
+	var sawExplicit bool
+	for i := 0; i < stmtList.ChildCount(); i++ {
+		child := stmtList.Child(i)
+		if child == nil || child.Type(lang) != ";" {
+			continue
+		}
+		sawExplicit = true
+		if got := child.Text(tree.Source()); got != ";" {
+			t.Fatalf("semicolon text = %q, want %q", got, ";")
+		}
+	}
+	if !sawExplicit {
+		t.Fatalf("statement_list missing explicit semicolon child: %s", stmtList.SExpr(lang))
+	}
+}
+
+func TestParseGoIncrementalRepeatedSingleByteEdit(t *testing.T) {
+	lang := grammars.GoLanguage()
+	parser := gotreesitter.NewParser(lang)
+
+	src := []byte(`package main
+
+func main() {
+	x := 0
+	_ = x
+}
+`)
+
+	editAt := bytes.Index(src, []byte("0"))
+	if editAt < 0 {
+		t.Fatal("could not find edit byte")
+	}
+	start := pointAtOffset(src, editAt)
+	end := pointAtOffset(src, editAt+1)
+	edit := gotreesitter.InputEdit{
+		StartByte:   uint32(editAt),
+		OldEndByte:  uint32(editAt + 1),
+		NewEndByte:  uint32(editAt + 1),
+		StartPoint:  start,
+		OldEndPoint: end,
+		NewEndPoint: end,
+	}
+
+	tree, err := parser.ParseWithTokenSource(src, mustGoTokenSource(t, src, lang))
+	if err != nil {
+		t.Fatalf("initial ParseWithTokenSource failed: %v", err)
+	}
+	if tree.RootNode() == nil {
+		t.Fatal("initial parse returned nil root")
+	}
+
+	for i := 0; i < 25; i++ {
+		if src[editAt] == '0' {
+			src[editAt] = '1'
+		} else {
+			src[editAt] = '0'
+		}
+
+		tree.Edit(edit)
+		tree, err = parser.ParseIncrementalWithTokenSource(src, tree, mustGoTokenSource(t, src, lang))
+		if err != nil {
+			t.Fatalf("iteration %d: incremental parse failed: %v", i, err)
+		}
+		if tree.RootNode() == nil {
+			t.Fatalf("iteration %d: incremental parse returned nil root", i)
+		}
+	}
+}
+
+func TestParseGoIncrementalWithTokenSourceReusesSubtrees(t *testing.T) {
+	lang := grammars.GoLanguage()
+	// This test drives GoTokenSource incremental reuse, which is ts2go-
+	// specific (the custom lexer's symbol map doesn't match grammargen).
+	// Skip when the default blob is grammargen.
+	if _, ok := lang.SymbolByName("source_file_token1"); !ok {
+		t.Skip("GoTokenSource is ts2go-specific; current Go blob is grammargen-compiled")
+	}
+	parser := gotreesitter.NewParser(lang)
+
+	src := []byte(`package main
+
+func main() {
+	v := 0
+	_ = v
+}
+`)
+	editAt := bytes.Index(src, []byte("v := 0"))
+	if editAt < 0 {
+		t.Fatal("could not find edit marker")
+	}
+	editAt += len("v := ")
+
+	start := pointAtOffset(src, editAt)
+	end := pointAtOffset(src, editAt+1)
+	edit := gotreesitter.InputEdit{
+		StartByte:   uint32(editAt),
+		OldEndByte:  uint32(editAt + 1),
+		NewEndByte:  uint32(editAt + 1),
+		StartPoint:  start,
+		OldEndPoint: end,
+		NewEndPoint: end,
+	}
+
+	ts := mustGoTokenSource(t, src, lang)
+	oldTree, err := parser.ParseWithTokenSource(src, ts)
+	if err != nil {
+		t.Fatalf("initial ParseWithTokenSource failed: %v", err)
+	}
+	if oldTree.RootNode() == nil {
+		t.Fatal("initial parse returned nil root")
+	}
+
+	next := append([]byte(nil), src...)
+	next[editAt] = '1'
+	oldTree.Edit(edit)
+	ts.Reset(next)
+
+	newTree, prof, err := parser.ParseIncrementalWithTokenSourceProfiled(next, oldTree, ts)
+	if err != nil {
+		t.Fatalf("ParseIncrementalWithTokenSourceProfiled failed: %v", err)
+	}
+	if newTree.RootNode() == nil {
+		t.Fatal("incremental parse returned nil root")
+	}
+	if got, want := newTree.RootNode().EndByte(), uint32(len(next)); got != want {
+		t.Fatalf("incremental parse truncated: root.EndByte=%d want=%d", got, want)
+	}
+	if newTree.RootNode().HasError() {
+		t.Fatal("incremental parse produced error root")
+	}
+	if prof.ReusedSubtrees == 0 {
+		t.Fatalf("expected subtree reuse, got profile: %+v", prof)
+	}
+	if prof.ReusedBytes == 0 {
+		t.Fatalf("expected reused bytes > 0, got profile: %+v", prof)
+	}
+
+	// Sanity-check against a fresh parse of the edited source.
+	freshTS := mustGoTokenSource(t, next, lang)
+	freshTree, err := parser.ParseWithTokenSource(next, freshTS)
+	if err != nil {
+		t.Fatalf("fresh ParseWithTokenSource failed: %v", err)
+	}
+	if freshTree.RootNode() == nil {
+		t.Fatal("fresh parse returned nil root")
+	}
+	if got, want := freshTree.RootNode().EndByte(), uint32(len(next)); got != want {
+		t.Fatalf("fresh parse truncated: root.EndByte=%d want=%d", got, want)
+	}
+	if freshTree.RootNode().HasError() {
+		t.Fatal("fresh parse produced error root")
+	}
+	if !bytes.Equal([]byte(newTree.RootNode().Text(next)), []byte(freshTree.RootNode().Text(next))) {
+		t.Fatalf("incremental root text mismatch with fresh parse")
+	}
+}
+
+func TestParseGoIncrementalRangeClauseReturnEdit(t *testing.T) {
+	lang := grammars.GoLanguage()
+	// Drives GoTokenSource incremental reuse; ts2go-specific. Skip when
+	// the default Go blob is grammargen.
+	if _, ok := lang.SymbolByName("source_file_token1"); !ok {
+		t.Skip("GoTokenSource is ts2go-specific; current Go blob is grammargen-compiled")
+	}
+
+	parseWithReturnDigit := func(t *testing.T, digit byte) {
+		t.Helper()
+
+		parser := gotreesitter.NewParser(lang)
+		base := []byte(`package p
+
+func f(s []int) int {
+	for _, v := range s {
+		_ = v
+	}
+	return 0
+}
+`)
+
+		tree, err := parser.ParseWithTokenSource(base, mustGoTokenSource(t, base, lang))
+		if err != nil {
+			t.Fatalf("initial ParseWithTokenSource failed: %v", err)
+		}
+		if tree.RootNode() == nil {
+			t.Fatal("initial parse returned nil root")
+		}
+
+		editAt := bytes.Index(base, []byte("return 0"))
+		if editAt < 0 {
+			t.Fatal("could not find return edit marker")
+		}
+		editAt += len("return ")
+
+		next := append([]byte(nil), base...)
+		next[editAt] = digit
+
+		start := pointAtOffset(base, editAt)
+		end := pointAtOffset(base, editAt+1)
+		edit := gotreesitter.InputEdit{
+			StartByte:   uint32(editAt),
+			OldEndByte:  uint32(editAt + 1),
+			NewEndByte:  uint32(editAt + 1),
+			StartPoint:  start,
+			OldEndPoint: end,
+			NewEndPoint: end,
+		}
+
+		tree.Edit(edit)
+		tree, err = parser.ParseIncrementalWithTokenSource(next, tree, mustGoTokenSource(t, next, lang))
+		if err != nil {
+			t.Fatalf("incremental parse failed: %v", err)
+		}
+		root := tree.RootNode()
+		if root == nil {
+			t.Fatal("incremental parse returned nil root")
+		}
+		if root.StartByte() != 0 {
+			t.Fatalf("root start mismatch: got %d, want 0", root.StartByte())
+		}
+		if root.EndByte() > uint32(len(next)) {
+			t.Fatalf("root end out of bounds: got %d, source len %d", root.EndByte(), len(next))
+		}
+		if trailing := next[root.EndByte():]; len(bytes.TrimSpace(trailing)) != 0 {
+			t.Fatalf("unexpected non-whitespace trailing bytes after root: %q", string(trailing))
+		}
+
+		got := root.Text(next)
+		if !bytes.Contains([]byte(got), []byte("package p")) {
+			t.Fatalf("root text missing package clause:\n%s", got)
+		}
+		if !bytes.Contains([]byte(got), []byte("func f(s []int) int")) {
+			t.Fatalf("root text missing function signature:\n%s", got)
+		}
+		if !bytes.Contains([]byte(got), []byte("for _, v := range s")) {
+			t.Fatalf("root text missing range clause:\n%s", got)
+		}
+		wantReturn := append([]byte("return "), digit)
+		if !bytes.Contains([]byte(got), wantReturn) {
+			t.Fatalf("root text missing edited return value %q:\n%s", string(wantReturn), got)
+		}
+		if root.HasError() {
+			t.Fatalf("incremental parse has errors for return %q", string([]byte{digit}))
+		}
+
+		fn := findNamedChild(lang, root, "function_declaration")
+		if fn == nil {
+			t.Fatal("missing function_declaration after incremental parse")
+		}
+		if findNamedChild(lang, fn, "range_clause") == nil {
+			t.Fatal("missing range_clause after incremental parse")
+		}
+		if findNamedChild(lang, fn, "return_statement") == nil {
+			t.Fatal("missing return_statement after incremental parse")
+		}
+	}
+
+	t.Run("return 1", func(t *testing.T) {
+		parseWithReturnDigit(t, '1')
+	})
+	t.Run("return 2", func(t *testing.T) {
+		parseWithReturnDigit(t, '2')
+	})
+}
