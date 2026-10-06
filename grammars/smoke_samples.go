@@ -57,7 +57,6 @@ var ParseSmokeSamples = map[string]string{
 
 	// RE/binary analysis grammars
 	"asm":         "main:\n    mov eax, 1\n    ret\n",
-	"disassembly": "0x400601 <__libc_csu_init+33>   sub    %r12,%rbp\n1000: 55                   push   rbp\n",
 	"wat":         "(module\n  (func $add (param i32 i32) (result i32)\n    local.get 0\n    local.get 1\n    i32.add))\n",
 
 	// Phase 2: DFA-only languages
@@ -71,7 +70,6 @@ var ParseSmokeSamples = map[string]string{
 	"ninja":      "rule cc\n  command = gcc\n",
 	"pascal":     "program Hello;\nvar x: integer;\nbegin\n  x := 42;\nend.\n",
 	"v":          "fn main() {}\n",
-	"caddy":      ":8080 {\n}\n",
 	"d":          "module m;\nint main() { return 0; }\n",
 	"scss":       ".a { color: red; }\n",
 	"vimdoc":     "*tag*\n\n",
@@ -124,7 +122,6 @@ var ParseSmokeSamples = map[string]string{
 	"templ":     "templ T() { <div>ok</div> }\n",
 	"jinja2":    "{% if x %}ok{% endif %}\n",
 	"gomod":     "module example.com/foo\n\ngo 1.21\n",
-	"jq":        "def f: . | length; .foo | f\n",
 	"smithy":    "namespace example\n",
 	"textproto": "name: \"hello\"\n",
 	"tlaplus":   "---- MODULE Test ----\n====\n",
@@ -173,7 +170,6 @@ var ParseSmokeSamples = map[string]string{
 	"diff":            "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n",
 	"djot":            "Hello world\n",
 	"dockerfile":      "FROM alpine\nRUN echo hi\n",
-	"ebnf":            "rule = \"a\" ;\n",
 	"eds":             "[1000]\nParameterName=Device type\n",
 	"eex":             "<%= 1 + 1 %>\n",
 	"elm":             "module Main exposing (main)\nmain = 1\n",
@@ -207,7 +203,6 @@ var ParseSmokeSamples = map[string]string{
 	"markdown_inline": "hello **world**\n",
 	"mermaid":         "flowchart TD\nA-->B\n",
 	"meson":           "message('hello')\n",
-	"nim":             "echo \"hello\"\n",
 	"objc":            "@interface Foo : NSObject\n@end\n",
 	"odin":            "package main\n",
 	"org":             "* TODO Heading\n",

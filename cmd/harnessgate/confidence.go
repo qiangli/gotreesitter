@@ -327,5 +327,5 @@ var core90ExtraConfidenceLanguages = []string{
 	"ada", "agda", "apex", "arduino", "astro", "authzed", "bitbake", "blade", "brightscript", "cairo",
 	"chatito", "cobol", "commonlisp", "cuda", "doxygen", "earthfile", "editorconfig", "enforce", "fennel", "fsharp",
 	"gdscript", "git_config", "git_rebase", "glsl", "godot_resource", "groovy", "haxe", "hlsl", "http", "hyprlang",
-	"kconfig", "less", "linkerscript", "nim", "norg", "nushell", "odin", "purescript", "rescript", "verilog",
+	"kconfig", "less", "linkerscript", "norg", "nushell", "odin", "purescript", "rescript", "verilog",
 }

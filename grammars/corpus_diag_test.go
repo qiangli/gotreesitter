@@ -19,11 +19,9 @@ func TestCorpusDiag(t *testing.T) {
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/earthfile/small__Earthfile", "earthfile"},
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/cpp/small__names.cpp", "cpp"},
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/bash/small__release.sh", "bash"},
-		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/jq/small__func-expr.jq", "jq"},
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/php/small__literals.php", "php"},
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/cmake/small__escape_sequence.txt", "cmake"},
 		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/fennel/small__edge-cases.txt", "fennel"},
-		{"/home/draco/work/gotreesitter/harness_out/corpus_real_205_noscala_bounded/caddy/small__named_routes.txt", "caddy"},
 	}
 
 	// Build lookup map from AllLanguages

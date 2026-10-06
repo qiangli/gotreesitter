@@ -100,7 +100,6 @@ var grammarToLinguist = map[string]string{
 	"corn":        "",
 	"cpon":        "",
 	"devicetree":  "",
-	"disassembly": "",
 	"djot":        "",
 	"doxygen":     "",
 	"dtd":         "",

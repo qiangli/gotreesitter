@@ -14,8 +14,6 @@ func TestCorpusTypeFailDiag(t *testing.T) {
 		lang string
 		file string
 	}{
-		// Pure DFA (no external scanner) — isolates issue to lexer/parser core
-		{"jq", "../harness_out/corpus_real_205_noscala_bounded/jq/small__func-expr.jq"},
 		{"sparql", "../harness_out/corpus_real_205_noscala_bounded/sparql/small__indents.sparql"},
 		{"pascal", "../harness_out/corpus_real_205_noscala_bounded/pascal/medium__foo.pas"},
 		{"meson", "../harness_out/corpus_real_205_noscala_bounded/meson/medium__meson.build.sway"},

@@ -99,11 +99,6 @@ func CSharpLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("c_sharp.bin")
 }
 
-// CaddyLanguage returns the caddy language definition.
-func CaddyLanguage() *gotreesitter.Language {
-	return loadEmbeddedLanguage("caddy.bin")
-}
-
 // CairoLanguage returns the cairo language definition.
 func CairoLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("cairo.bin")
@@ -229,11 +224,6 @@ func DiffLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("diff.bin")
 }
 
-// DisassemblyLanguage returns the disassembly language definition.
-func DisassemblyLanguage() *gotreesitter.Language {
-	return loadEmbeddedLanguage("disassembly.bin")
-}
-
 // DjotLanguage returns the djot language definition.
 func DjotLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("djot.bin")
@@ -262,11 +252,6 @@ func DtdLanguage() *gotreesitter.Language {
 // EarthfileLanguage returns the earthfile language definition.
 func EarthfileLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("earthfile.bin")
-}
-
-// EbnfLanguage returns the ebnf language definition.
-func EbnfLanguage() *gotreesitter.Language {
-	return loadEmbeddedLanguage("ebnf.bin")
 }
 
 // EditorconfigLanguage returns the editorconfig language definition.
@@ -519,11 +504,6 @@ func Jinja2Language() *gotreesitter.Language {
 	return loadEmbeddedLanguage("jinja2.bin")
 }
 
-// JqLanguage returns the jq language definition.
-func JqLanguage() *gotreesitter.Language {
-	return loadEmbeddedLanguage("jq.bin")
-}
-
 // JsdocLanguage returns the jsdoc language definition.
 func JsdocLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("jsdoc.bin")
@@ -652,11 +632,6 @@ func NginxLanguage() *gotreesitter.Language {
 // NickelLanguage returns the nickel language definition.
 func NickelLanguage() *gotreesitter.Language {
 	return loadEmbeddedLanguage("nickel.bin")
-}
-
-// NimLanguage returns the nim language definition.
-func NimLanguage() *gotreesitter.Language {
-	return loadEmbeddedLanguage("nim.bin")
 }
 
 // NinjaLanguage returns the ninja language definition.

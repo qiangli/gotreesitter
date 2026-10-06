@@ -21,7 +21,6 @@ var resultCompatibilityStrutLanguageNames = []string{
 	"bash",
 	"c",
 	"c_sharp",
-	"caddy",
 	"cobol",
 	"COBOL",
 	"comment",
@@ -40,7 +39,6 @@ var resultCompatibilityStrutLanguageNames = []string{
 	"lua",
 	"make",
 	"nginx",
-	"nim",
 	"pascal",
 	"perl",
 	"php",
@@ -67,8 +65,6 @@ func resultCompatibilityStrutForLanguage(name string) resultCompatibilityStrut {
 		return normalizeCResultStrut
 	case "c_sharp":
 		return normalizeCSharpResultStrut
-	case "caddy":
-		return normalizeCaddyResultStrut
 	case "cobol", "COBOL":
 		return normalizeCobolResultStrut
 	case "comment":
@@ -103,8 +99,6 @@ func resultCompatibilityStrutForLanguage(name string) resultCompatibilityStrut {
 		return normalizeMakeResultStrut
 	case "nginx":
 		return normalizeNginxResultStrut
-	case "nim":
-		return normalizeNimResultStrut
 	case "pascal":
 		return normalizePascalResultStrut
 	case "perl":
@@ -171,10 +165,6 @@ func normalizeCResultStrut(ctx resultCompatibilityContext) {
 
 func normalizeCSharpResultStrut(ctx resultCompatibilityContext) {
 	normalizeCSharpCompatibility(ctx.root, ctx.source, ctx.parser, ctx.lang)
-}
-
-func normalizeCaddyResultStrut(ctx resultCompatibilityContext) {
-	normalizeTopLevelTrailingLineBreakSpan(ctx.root, ctx.source, ctx.lang)
 }
 
 func normalizeCobolResultStrut(ctx resultCompatibilityContext) {
@@ -244,10 +234,6 @@ func normalizeMakeResultStrut(ctx resultCompatibilityContext) {
 
 func normalizeNginxResultStrut(ctx resultCompatibilityContext) {
 	normalizeNginxAttributeLineBreaks(ctx.root, ctx.source, ctx.lang)
-}
-
-func normalizeNimResultStrut(ctx resultCompatibilityContext) {
-	normalizeNimTopLevelCallEnd(ctx.root, ctx.source, ctx.lang)
 }
 
 func normalizePascalResultStrut(ctx resultCompatibilityContext) {

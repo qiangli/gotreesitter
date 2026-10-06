@@ -21,25 +21,6 @@ func TestPugTopLevelTagCarriesTrailingNewlineSpan(t *testing.T) {
 	}
 }
 
-func TestCaddyTopLevelServerCarriesTrailingNewlineSpan(t *testing.T) {
-	const src = ":8080 {\n}\n"
-	tree, lang := parseByLanguageName(t, "caddy", src)
-	root := tree.RootNode()
-	if root.HasError() {
-		t.Fatalf("unexpected caddy parse error: %s", root.SExpr(lang))
-	}
-	if root.ChildCount() != 1 {
-		t.Fatalf("caddy root childCount=%d, want 1", root.ChildCount())
-	}
-	server := root.Child(0)
-	if server == nil || server.Type(lang) != "server" {
-		t.Fatalf("caddy child=%v, want server", server)
-	}
-	if got, want := server.EndByte(), root.EndByte(); got != want {
-		t.Fatalf("caddy server.EndByte=%d, want root.EndByte=%d", got, want)
-	}
-}
-
 func TestCooklangStepCarriesTerminalPunctuationAndRootNewline(t *testing.T) {
 	const src = "Add @salt{1%tsp}.\n"
 	tree, lang := parseByLanguageName(t, "cooklang", src)

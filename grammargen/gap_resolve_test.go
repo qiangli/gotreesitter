@@ -31,7 +31,6 @@ func TestGapDiagnostic(t *testing.T) {
 		{"proto", grammars.ProtoLanguage, protoSamples(), false},
 		{"dockerfile", grammars.DockerfileLanguage, dockerfileSamples(), true},
 		{"nix", grammars.NixLanguage, nixSamples(), true},
-		{"jq", grammars.JqLanguage, jqSamples(), false},
 		{"hcl", grammars.HclLanguage, hclSamples(), true},
 		{"eex", grammars.EexLanguage, eexSamples(), true},
 		{"gomod", grammars.GomodLanguage, gomodSamples(), false},
@@ -207,16 +206,6 @@ func nixSamples() []string {
 		"x: x + 1", "{ a, b }: a + b",
 		`import ./foo.nix`, "[ 1 2 3 ]", "a.b.c",
 		"if true then 1 else 2", "with pkgs; [ foo bar ]",
-	}
-}
-func jqSamples() []string {
-	return []string{
-		".", ".foo", ".foo.bar", ".[]", ".[0]",
-		"select(.age > 21)", "map(.name)", "{name: .first, age: .years}",
-		"[.[] | select(. > 2)]", "if .foo then .bar else .baz end",
-		"def double: . * 2; [1,2,3] | map(double)",
-		".foo // \"default\"", "(.foo | length) > 0",
-		"[range(5)]", "null",
 	}
 }
 func hclSamples() []string {

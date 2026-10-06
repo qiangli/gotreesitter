@@ -1,21 +1,5 @@
 package gotreesitter
 
-func normalizeNimTopLevelCallEnd(root *Node, source []byte, lang *Language) {
-	if root == nil || lang == nil || lang.Name != "nim" || root.Type(lang) != "source_file" || len(root.children) != 1 {
-		return
-	}
-	call := root.children[0]
-	if call == nil || call.IsExtra() || call.Type(lang) != "call" {
-		return
-	}
-	end := lastNonTriviaByteEnd(source)
-	if end == 0 || end >= call.endByte {
-		return
-	}
-	call.endByte = end
-	call.endPoint = advancePointByBytes(Point{}, source[:end])
-}
-
 func normalizePascalTopLevelProgramEnd(root *Node, source []byte, lang *Language) {
 	if root == nil || lang == nil || lang.Name != "pascal" || root.Type(lang) != "root" || len(root.children) == 0 {
 		return
@@ -183,7 +167,7 @@ func normalizeTopLevelTrailingLineBreakSpan(root *Node, source []byte, lang *Lan
 		return
 	}
 	switch lang.Name {
-	case "caddy", "fortran", "pug":
+	case "fortran", "pug":
 	default:
 		return
 	}
