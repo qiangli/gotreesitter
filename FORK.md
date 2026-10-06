@@ -13,14 +13,14 @@ blob-free copy — yoke's direct imports and, critically, the transitive
 which embeds the same five grammars), so renaming the module path would leave
 the GPL/MPL bytes linked through gfy.
 
-## Status: temporary
+## Status: permanent dhnt-internal fork
 
-This fork exists only until the upstream PR adding the
-`grammar_exclude_nonpermissive` build tag lands (patch: branch
-`exclude-grammars-tag`, commit on top of the pristine v0.16.0 import; PR URL:
-_to be recorded here when opened_). When it merges: pin upstream at the release
-containing it, build with `-tags grammar_exclude_nonpermissive`, drop the
-`replace`, keep the license check as the guard, and archive this repository.
+This fork is maintained for dhnt/bashy use only (operator decision
+2026-10-06, Sprint 369). No upstream PR is pursued: an exclusion-tag change
+of this kind would not be accepted upstream, so the `replace` directives in
+yoke and bashy stay. The `exclude-grammars-tag` branch keeps a reference
+implementation of the tag approach. Re-sync policy: rebase onto new upstream
+releases only for grammar updates, re-deleting the same five grammars.
 
 ## Why the fork exists
 

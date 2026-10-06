@@ -1,10 +1,6 @@
-> **This fork exists only until an upstream PR lands.** It is a temporary
-> qiangli fork of odvcencio/gotreesitter whose sole change is deleting five
-> non-permissive grammars (see [FORK.md](FORK.md)). The same outcome is
-> proposed upstream as the `grammar_exclude_nonpermissive` build tag (branch
-> `exclude-grammars-tag` of this repository; PR link recorded in FORK.md). Once
-> it is merged and released, consumers drop the `replace` and pin upstream with
-> that tag, and this fork is archived.
+> **This is a permanent dhnt-internal fork** of odvcencio/gotreesitter
+> whose sole change is deleting five non-permissive grammars
+> (see [FORK.md](FORK.md)). No upstream PR is pursued for it.
 
 # gotreesitter
 
