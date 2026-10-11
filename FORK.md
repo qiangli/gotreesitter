@@ -75,3 +75,14 @@ re-apply this deletion list (the five names), and regenerate
 (yoke `scripts/grammar-licenses.sh`) — the attribution report and the lock
 file must never disagree. If upstream gains an upstreamable per-grammar
 exclusion mechanism, prefer retiring this fork for it.
+
+## Tracked grammargen sources (Sprint 405, story 1efb27ac91cb)
+
+`grammargen/go_grammar.go` (`GoGrammar`) and `grammargen/emit_grammar_go.go`
+(`EmitGrammarGo`) are tracked sources, not ignored build output: `cmd/grammargen`
+and `cmd/emit_grammargen_go_blob` need them for `GOWORK=off go build ./...`.
+They were recovered from lineage commit `ae389d6`; the emitter was extended with
+reserved-word sets, precedences, flags and embedded tests, and
+`TestEmitGrammarGoReproducesTrackedGrammars` pins that re-emitting the tracked
+Go/Fortran/JavaScript grammars is byte-identical. Core100 is 97 languages after
+the caddy/disassembly/ebnf removal; `grammars/update_tier1_core100.txt` mirrors it.

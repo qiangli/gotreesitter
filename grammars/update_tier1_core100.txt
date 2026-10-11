@@ -67,7 +67,6 @@ bicep
 bitbake
 blade
 brightscript
-caddy
 cairo
 capnp
 chatito
@@ -84,13 +83,11 @@ cylc
 desktop
 devicetree
 diff
-disassembly
 djot
 dockerfile
 doxygen
 dtd
 earthfile
-ebnf
 editorconfig
 eds
 eex
