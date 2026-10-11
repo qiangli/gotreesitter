@@ -1,6 +1,7 @@
 package grammars
 
-// core100LanguageNames defines the curated 100-language build set used by the
+// core100LanguageNames defines the curated Core100 build set (97 languages after
+// the fork dropped the non-permissive caddy/disassembly/ebnf) used by the
 // grammar_set_core build tag.
 var core100LanguageNames = []string{
 	"bash",
