@@ -2,7 +2,7 @@ module github.com/odvcencio/gotreesitter
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	go.lsp.dev/jsonrpc2 v0.10.0
