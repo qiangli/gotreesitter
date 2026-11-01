@@ -18,3 +18,12 @@ Diagnostic checkpoints use `[skip ci]` only to suppress the unrelated automatic
 full race matrix while the explicit manual TSX container job locates the first
 divergence. The full requested public module validation remains required after
 the repair; the focused diagnostic is not aggregate acceptance.
+
+Hosted diagnostic 41329763032 reproduced the unchanged pinned smoke: generated
+JSX text consumes the semicolon after a closing element, then becomes invalid
+after reductions. The reference consumes the semicolon normally. The bounded
+repair opts the stateless TSX scanner into existing DFA relex recovery only for
+one unshifted live branch with an invalid external token and a valid positive
+width replacement. Other scanner capabilities and LR splitting stay unchanged.
+Targeted synthetic safety guards and pinned smoke will run hosted before broader
+TSX corpus validation and aggregate module acceptance.

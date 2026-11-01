@@ -233,3 +233,12 @@ func AdaptExternalScannerByExternalOrder(sourceLang, targetLang *Language) (Exte
 		sourceResultToTarget: sourceResultToTarget,
 	}, true
 }
+
+// SupportsStatelessRelex preserves the wrapped scanner's explicit capability.
+func (a *externalScannerOrderAdapter) SupportsStatelessRelex() bool {
+	if a == nil {
+		return false
+	}
+	scanner, ok := a.inner.(StatelessRelexExternalScanner)
+	return ok && scanner.SupportsStatelessRelex()
+}

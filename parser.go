@@ -473,7 +473,7 @@ func (p *Parser) tryRelexBroadDFA(tok Token, parserState StateID, ts TokenSource
 // current parser state's DFA lex mode. This helps when a lookahead token was
 // originally lexed under a pre-reduce state, but a reduce chain changes the
 // parser state before the token is consumed.
-func (p *Parser) tryRelexCurrentStateDFA(tok Token, parserState StateID, ts TokenSource) (Token, bool) {
+func (p *Parser) tryRelexCurrentStateDFA(tok Token, parserState StateID, ts TokenSource, stacks []glrStack) (Token, bool) {
 	if p == nil || p.language == nil || ts == nil || tok.NoLookahead {
 		return Token{}, false
 	}
@@ -487,15 +487,37 @@ func (p *Parser) tryRelexCurrentStateDFA(tok Token, parserState StateID, ts Toke
 	if int(parserState) >= len(p.language.LexModes) {
 		return Token{}, false
 	}
-	if dts.language.ExternalScanner != nil && p.language.LexModes[parserState].ExternalLexState != 0 {
-		return Token{}, false
+	statelessExternalRelex := dts.language.ExternalScanner != nil && p.language.LexModes[parserState].ExternalLexState != 0
+	if statelessExternalRelex {
+		// A reduction can invalidate an external lookahead (for example JSX
+		// text after a closing tag). Only a scanner explicitly guaranteeing
+		// stateless scans can discard it without a scanner-state rollback.
+		// The token source cursor is shared across GLR branches. Do not
+		// rewind a lookahead another live branch may have consumed.
+		live := 0
+		for i := range stacks {
+			if stacks[i].dead {
+				continue
+			}
+			if stacks[i].shifted || stacks[i].byteOffset > tok.StartByte || stacks[i].top().state != parserState {
+				return Token{}, false
+			}
+			live++
+		}
+		if live != 1 {
+			return Token{}, false
+		}
+		scanner, safe := dts.language.ExternalScanner.(StatelessRelexExternalScanner)
+		if !safe || !scanner.SupportsStatelessRelex() || dts.externalSymbolIndex(tok.Symbol) < 0 || p.lookupActionIndex(parserState, tok.Symbol) != 0 {
+			return Token{}, false
+		}
 	}
 	savedPos, savedRow, savedCol := dts.lexer.pos, dts.lexer.row, dts.lexer.col
 	dts.lexer.pos = int(tok.StartByte)
 	dts.lexer.row = tok.StartPoint.Row
 	dts.lexer.col = tok.StartPoint.Column
 	tok2, endPos, endRow, endCol := dts.scanPreferredTokenForState(parserState)
-	if tok2.Symbol == 0 {
+	if tok2.Symbol == 0 || (statelessExternalRelex && tok2.EndByte <= tok2.StartByte) {
 		dts.lexer.pos, dts.lexer.row, dts.lexer.col = savedPos, savedRow, savedCol
 		return Token{}, false
 	}
@@ -1802,7 +1824,7 @@ func (p *Parser) parseInternal(source []byte, ts TokenSource, reuse *reuseCursor
 					// after a reduce chain changes the current state. Re-lex once
 					// before accepting EOF so multiline constructs can continue.
 					if sameState {
-						if reTok, ok := p.tryRelexCurrentStateDFA(tok, currentState, ts); ok {
+						if reTok, ok := p.tryRelexCurrentStateDFA(tok, currentState, ts, stacks); ok {
 							tok = reTok
 							needToken = false
 							goto retryAction
@@ -1843,7 +1865,7 @@ func (p *Parser) parseInternal(source []byte, ts TokenSource, reuse *reuseCursor
 				// invalid after all live stacks converge on the same reduced state.
 				// Re-lex once under that current state before broader recovery.
 				if sameState {
-					if reTok, ok := p.tryRelexCurrentStateDFA(tok, currentState, ts); ok {
+					if reTok, ok := p.tryRelexCurrentStateDFA(tok, currentState, ts, stacks); ok {
 						tok = reTok
 						needToken = false
 						goto retryAction

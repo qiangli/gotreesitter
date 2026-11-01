@@ -172,6 +172,15 @@ type ExternalScanner interface {
 	Scan(payload any, lexer *ExternalLexer, validSymbols []bool) bool
 }
 
+// StatelessRelexExternalScanner opts into discarding a stale external lookahead
+// after reductions. Scan must not change any scanner or payload state; rescanning
+// the same input must require no rollback. This does not authorize replacing a
+// token that still has a parser action.
+type StatelessRelexExternalScanner interface {
+	ExternalScanner
+	SupportsStatelessRelex() bool
+}
+
 // IncrementalReuseExternalScanner is implemented by external scanners that can
 // safely participate in DFA subtree reuse during incremental parses. Scanners
 // with serialized mutable state, such as Python's indentation stack, should
