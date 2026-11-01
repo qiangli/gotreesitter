@@ -27,3 +27,9 @@ one unshifted live branch with an invalid external token and a valid positive
 width replacement. Other scanner capabilities and LR splitting stay unchanged.
 Targeted synthetic safety guards and pinned smoke will run hosted before broader
 TSX corpus validation and aggregate module acceptance.
+
+Repair checkpoint 66339c2 passed hosted run 41330365940: synthetic safety
+regressions, unchanged imported smoke (1/1 no-error, 1/1 parity), and deep
+reference parity for the smoke. Independent review added explicit opt-out and
+following-source preservation checks. The next focused gate runs all existing
+TSX snippet and direct-C-named deep regression cases against the embedded oracle.

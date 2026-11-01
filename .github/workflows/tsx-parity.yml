@@ -33,7 +33,13 @@ jobs:
           set -euo pipefail
           go test -count=1 -timeout 1m -v . -run '^TestStatelessExternalRelex' 2>&1 | tee tsx-parity.log
           go test -count=1 -timeout 5m -v ./grammargen \
-            -run '^(TestMultiGrammarImportPipeline|TestTSXCorpusSnippetParity)$/^(tsx|jsx_return_smoke)$' 2>&1 | tee -a tsx-parity.log
+            -run '^TestMultiGrammarImportPipeline$/^tsx$' 2>&1 | tee -a tsx-parity.log
+      - name: TSX snippet and deep regression parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout 5m -v ./grammargen \
+            -run '^(TestTSXCorpusSnippetParity|TestTSXDirectCRegressionDeepParity)$' 2>&1 | tee -a tsx-parity.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

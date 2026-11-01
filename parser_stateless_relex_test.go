@@ -8,6 +8,12 @@ type statelessRelexTestScanner struct {
 
 func (statelessRelexTestScanner) SupportsStatelessRelex() bool { return true }
 
+type disabledRelexTestScanner struct {
+	parserTestUnsafeExternalScanner
+}
+
+func (disabledRelexTestScanner) SupportsStatelessRelex() bool { return false }
+
 func TestStatelessExternalRelex(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -19,6 +25,7 @@ func TestStatelessExternalRelex(t *testing.T) {
 	}{
 		{"stale external", statelessRelexTestScanner{}, 2, 4, false, true},
 		{"scanner without capability", parserTestUnsafeExternalScanner{}, 2, 4, false, false},
+		{"scanner declines capability", disabledRelexTestScanner{}, 2, 4, false, false},
 		{"nonexternal lookahead", statelessRelexTestScanner{}, 2, 1, false, false},
 		{"external still valid", statelessRelexTestScanner{}, 2, 4, true, false},
 		{"replacement has no action", statelessRelexTestScanner{}, 0, 4, false, false},
@@ -36,7 +43,7 @@ func TestStatelessExternalRelex(t *testing.T) {
 				lang.ParseTable[tc.state][4] = 4
 			}
 			parser := NewParser(lang)
-			lexer := NewLexer(lang.LexStates, []byte("+\n"))
+			lexer := NewLexer(lang.LexStates, []byte("+\n12"))
 			lexer.pos, lexer.row, lexer.col = 2, 1, 0
 			source := &dfaTokenSource{lexer: lexer, language: lang, state: tc.state, lookupActionIndex: parser.lookupActionIndex}
 			original := Token{Symbol: tc.symbol, StartByte: 0, EndByte: 2, EndPoint: Point{Row: 1}}
@@ -54,6 +61,13 @@ func TestStatelessExternalRelex(t *testing.T) {
 			if source.state != tc.state {
 				t.Fatal("speculation changed parser state")
 			}
+			if tc.want {
+				source.SetParserState(0)
+				next := source.Next()
+				if next.Symbol != 1 || next.StartByte != 2 || next.EndByte != 4 || next.StartPoint.Row != 1 {
+					t.Fatalf("short replacement lost following source: %+v", next)
+				}
+			}
 		})
 	}
 }
@@ -63,7 +77,7 @@ func TestStatelessExternalRelexAdapterCapability(t *testing.T) {
 		scanner ExternalScanner
 		want    bool
 	}{
-		{statelessRelexTestScanner{}, true}, {parserTestUnsafeExternalScanner{}, false}, {nil, false},
+		{statelessRelexTestScanner{}, true}, {disabledRelexTestScanner{}, false}, {parserTestUnsafeExternalScanner{}, false}, {nil, false},
 	} {
 		adapter := &externalScannerOrderAdapter{inner: tc.scanner}
 		if got := adapter.SupportsStatelessRelex(); got != tc.want {
