@@ -2591,13 +2591,22 @@ func TestMultiGrammarImportPipeline(t *testing.T) {
 
 			for _, sample := range g.samples {
 				totalSamples++
-				genTree, _ := genParser.Parse([]byte(sample))
-				refTree, _ := refParser.Parse([]byte(sample))
+				genTree, genErr := genParser.Parse([]byte(sample))
+				refTree, refErr := refParser.Parse([]byte(sample))
+				if genErr != nil || refErr != nil || genTree == nil || refTree == nil {
+					t.Errorf("parse sample %q: generated=%v reference=%v", sample, genErr, refErr)
+					continue
+				}
 
 				genSexp := genTree.RootNode().SExpr(genLang)
 				refSexp := refTree.RootNode().SExpr(refLang)
 
 				genHasError := strings.Contains(genSexp, "ERROR") || strings.Contains(genSexp, "MISSING")
+				if genHasError {
+					t.Logf("sample: %q\ngenerated: %s\nreference: %s", sample, genSexp, refSexp)
+					t.Logf("generated runtime: %s", genTree.ParseRuntime().Summary())
+					logFirstProblemNode(t, "gen", genTree.RootNode(), genLang, []byte(sample))
+				}
 
 				if !genHasError {
 					noErrCount++

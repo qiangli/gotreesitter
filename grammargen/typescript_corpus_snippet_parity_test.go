@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/odvcencio/gotreesitter"
+	"github.com/odvcencio/gotreesitter/grammars"
 )
 
 func TestTypeScriptCorpusSnippetParity(t *testing.T) {
@@ -160,6 +161,10 @@ func TestTSXCorpusSnippetParity(t *testing.T) {
 		name string
 		src  string
 	}{
+		{
+			name: "jsx_return_smoke",
+			src:  grammars.ParseSmokeSample("tsx"),
+		},
 		{
 			name: "generic_call",
 			src:  "f<T>(x)\n",

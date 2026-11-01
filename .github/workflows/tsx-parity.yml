@@ -1,0 +1,40 @@
+name: TSX imported grammar parity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tsx:
+    runs-on: ubuntu-latest
+    container: golang:1.27.2-bookworm
+    timeout-minutes: 15
+    env:
+      GOWORK: "off"
+      DIAG_TS_CORPUS_SNIPPET: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision exact TSX grammar pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r name url revision source extensions < <(awk '$1 == "tsx" {print}' grammars/languages.lock)
+          test "$name" = tsx
+          test "$url" = https://github.com/tree-sitter/tree-sitter-typescript
+          test "$source" = tsx/src
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init /tmp/grammar_parity/typescript
+          git -C /tmp/grammar_parity/typescript remote add origin "$url"
+          git -C /tmp/grammar_parity/typescript fetch --depth=1 origin "$revision"
+          git -C /tmp/grammar_parity/typescript checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/grammar_parity/typescript rev-parse HEAD)" = "$revision"
+      - name: TSX smoke and focused reference parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout 5m -v ./grammargen \
+            -run '^(TestMultiGrammarImportPipeline|TestTSXCorpusSnippetParity)$/^(tsx|jsx_return_smoke)$' 2>&1 | tee tsx-parity.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tsx-parity
+          path: tsx-parity.log
