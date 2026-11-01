@@ -33,3 +33,9 @@ regressions, unchanged imported smoke (1/1 no-error, 1/1 parity), and deep
 reference parity for the smoke. Independent review added explicit opt-out and
 following-source preservation checks. The next focused gate runs all existing
 TSX snippet and direct-C-named deep regression cases against the embedded oracle.
+
+Expanded hosted run https://github.com/qiangli/gotreesitter/actions/runs/41330511422
+passed at f1f80fc: all 18 TSX snippet cases, seven deep regression cases, unchanged
+import smoke (1/1 no-error and parity), and all synthetic scanner/cursor/GLR guard
+checks. No tests skipped. Full public module validation and manager acceptance
+remain required; this record does not declare aggregate release acceptance.
